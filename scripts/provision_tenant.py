@@ -41,7 +41,19 @@ def provision_postgres(tenant: str, password: str):
         )
     )
     cur.execute(sql.SQL("ALTER DATABASE {} OWNER TO {}").format(sql.Identifier(db_name), sql.Identifier(user)))
+    # Restrict access: remove public access and grant only to tenant
+    cur.execute(sql.SQL("REVOKE ALL ON DATABASE {} FROM PUBLIC").format(sql.Identifier(db_name)))
     cur.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(sql.Identifier(db_name), sql.Identifier(user)))
+    # Revoke access to all other databases for this tenant
+    cur.execute("SELECT datname FROM pg_database WHERE datistemplate = false;")
+    for row in cur.fetchall():
+        other_db = row[0]
+        if other_db != db_name:
+            cur.execute(
+                sql.SQL("REVOKE ALL ON DATABASE {} FROM {}").format(
+                    sql.Identifier(other_db), sql.Identifier(user)
+                )
+            )
     # Connect to the new database to grant schema privileges
     cur.close()
     conn.close()
