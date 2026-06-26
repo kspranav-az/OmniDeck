@@ -30,11 +30,19 @@ def deprovision_postgres(tenant: str):
     )
     conn.autocommit = True
     cur = conn.cursor()
+    # Drop the main tenant database and any rollback "broken" copies.
     cur.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(db_name)))
+    cur.execute(
+        "SELECT datname FROM pg_database WHERE datname LIKE %s",
+        (f"{db_name}_broken_%",),
+    )
+    for row in cur.fetchall():
+        broken_db = row[0]
+        cur.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(broken_db)))
     cur.execute(sql.SQL("DROP USER IF EXISTS {}").format(sql.Identifier(user)))
     cur.close()
     conn.close()
-    print(f"[postgres] dropped database {db_name} and user {user}")
+    print(f"[postgres] dropped database {db_name}, broken copies, and user {user}")
 
 
 def deprovision_mongo(tenant: str):

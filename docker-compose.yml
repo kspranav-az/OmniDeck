@@ -8,9 +8,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./backups/postgres:/backups/postgres
+      - backups:/backups
     ports:
-      - "15432:5432"
+      - "127.0.0.1:15432:5432"
     deploy:
       resources:
         limits:
@@ -30,9 +30,9 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-admin}
     volumes:
       - mongodata:/data/db
-      - ./backups/mongo:/backups/mongo
+      - backups:/backups
     ports:
-      - "37017:27017"
+      - "127.0.0.1:37017:27017"
     command: ["mongod", "--auth", "--port", "27017", "--wiredTigerCacheSizeGB", "1"]
     deploy:
       resources:
@@ -53,9 +53,9 @@ services:
       --requirepass ${REDIS_PASSWORD:-redis}
     volumes:
       - redisdata:/data
-      - ./backups/redis:/backups/redis
+      - backups:/backups
     ports:
-      - "16379:6379"
+      - "127.0.0.1:16379:6379"
     deploy:
       resources:
         limits:
@@ -77,8 +77,8 @@ services:
     volumes:
       - miniodata:/data
     ports:
-      - "19000:9000"
-      - "19001:9001"
+      - "127.0.0.1:19000:9000"
+      - "127.0.0.1:19001:9001"
     command: server /data --console-address ":9001"
     deploy:
       resources:
@@ -195,6 +195,7 @@ volumes:
   redisdata:
   miniodata:
   frontend_db:
+  backups:
 
 networks:
   default:
