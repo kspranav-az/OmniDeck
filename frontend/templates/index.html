@@ -1,14 +1,10 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OmniDeck</title>
-</head>
-<body>
-    <h1>OmniDeck</h1>
-    <p>Management frontend placeholder.</p>
-    <a href="/admin">Admin Login</a>
-    <a href="/dashboard">Intern Login</a>
-</body>
-</html>
+{% extends "base.html" %}
+
+{% block content %}
+<h1>OmniDeck</h1>
+<p>Centralized multi-tenant developer platform.</p>
+<div class="actions">
+    <a href="/admin" class="btn">Admin Dashboard</a>
+    <a href="/dashboard" class="btn">Intern Dashboard</a>
+</div>
+{% endblock %}

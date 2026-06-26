@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - OmniDeck{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>Admin Dashboard</h1>
+    <div>
+        <span>Logged in as {{ username }}</span>
+        <a href="/admin/logout" class="btn-small">Logout</a>
+    </div>
+</div>
+
+<section>
+    <h2>Create Tenant</h2>
+    <form method="post" action="/admin/tenants" class="inline-form">
+        <input type="text" name="name" placeholder="project-name" pattern="[a-z0-9_-]+" required>
+        <button type="submit">Create</button>
+    </form>
+</section>
+
+<section>
+    <h2>Tenants</h2>
+    {% if tenants %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Created</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for tenant in tenants %}
+            <tr>
+                <td>{{ tenant.name }}</td>
+                <td>{{ tenant.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td>
+                    <a href="/admin/tenants/{{ tenant.name }}/credentials">Credentials</a>
+                    <form method="post" action="/admin/tenants/{{ tenant.name }}/delete" class="inline" onsubmit="return confirm('Delete tenant {{ tenant.name }}? This cannot be undone.');">
+                        <button type="submit" class="danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>No tenants yet.</p>
+    {% endif %}
+</section>
+
+<section>
+    <h2>System Health</h2>
+    <div id="health">Loading...</div>
+    <script>
+        fetch('/admin/health').then(r => r.json()).then(data => {
+            const div = document.getElementById('health');
+            if (data.error) {
+                div.textContent = data.error;
+                return;
+            }
+            let html = '<table><thead><tr><th>Container</th><th>Status</th><th>CPU %</th><th>Memory</th></tr></thead><tbody>';
+            for (const c of data.containers) {
+                html += `<tr><td>${c.name}</td><td>${c.status}</td><td>${c.cpu_percent ?? '-'}</td><td>${c.memory_usage_mb ?? '-'}/${c.memory_limit_mb ?? '-'}</td></tr>`;
+            }
+            html += '</tbody></table>';
+            div.innerHTML = html;
+        }).catch(e => document.getElementById('health').textContent = e);
+    </script>
+</section>
+{% endblock %}
