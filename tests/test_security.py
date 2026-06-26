@@ -66,7 +66,7 @@ def test_docker_socket_read_only():
 
 
 def test_nginx_rate_limit_admin_login():
-    """Repeated POSTs to /admin/login via nginx should be rate limited."""
+    """Repeated POSTs to the admin login API via nginx should be rate limited."""
     # Ensure nginx has loaded the latest configuration.
     subprocess.run(
         ["docker", "exec", "omnideck-nginx", "nginx", "-s", "reload"],
@@ -78,8 +78,8 @@ def test_nginx_rate_limit_admin_login():
     for _ in range(10):
         try:
             resp = httpx.post(
-                f"{NGINX_URL}/admin/login",
-                data={"username": "admin", "password": "wrong"},
+                f"{NGINX_URL}/api/auth/login",
+                json={"username": "admin", "password": "wrong"},
                 follow_redirects=False,
                 timeout=5,
             )

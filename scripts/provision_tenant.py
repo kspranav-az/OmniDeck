@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Provision a new OmniDeck tenant across all four backend services."""
 import json
+import os
 import sys
 
 import psycopg
@@ -139,7 +140,8 @@ def provision_minio(tenant: str, secret_key: str):
     # Enable versioning
     client.set_bucket_versioning(tenant, VersioningConfig(status="Enabled"))
 
-    # Use mc to create a service account restricted to this bucket
+    # Use mc to create a service account restricted to this bucket.
+    # Best-effort removal first makes this idempotent for re-enabled services.
     import subprocess
     subprocess.run(
         ["mc", "alias", "set", "local", "http://minio:9000", root_user, root_password],
@@ -161,6 +163,21 @@ def provision_minio(tenant: str, secret_key: str):
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         f.write(policy_doc)
         policy_path = f.name
+    subprocess.run(
+        ["mc", "admin", "policy", "detach", "local", policy_name, "--user", access_key],
+        check=False,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["mc", "admin", "user", "remove", "local", access_key],
+        check=False,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["mc", "admin", "policy", "remove", "local", policy_name],
+        check=False,
+        capture_output=True,
+    )
     subprocess.run(
         ["mc", "admin", "policy", "create", "local", policy_name, policy_path],
         check=True,
@@ -185,15 +202,25 @@ def main():
         sys.exit(1)
     tenant = validate_tenant_name(sys.argv[1])
 
+    enabled = {s.strip() for s in os.environ.get("OMNIDECK_ENABLED_SERVICES", "postgres,mongo,redis,minio").split(",") if s.strip()}
+    all_services = {"postgres", "mongo", "redis", "minio"}
+    enabled = enabled & all_services
+    if not enabled:
+        enabled = all_services
+
     postgres_password = generate_password()
     mongo_password = generate_password()
     redis_password = generate_password()
     minio_secret_key = generate_password()
 
-    provision_postgres(tenant, postgres_password)
-    provision_mongo(tenant, mongo_password)
-    provision_redis(tenant, redis_password)
-    provision_minio(tenant, minio_secret_key)
+    if "postgres" in enabled:
+        provision_postgres(tenant, postgres_password)
+    if "mongo" in enabled:
+        provision_mongo(tenant, mongo_password)
+    if "redis" in enabled:
+        provision_redis(tenant, redis_password)
+    if "minio" in enabled:
+        provision_minio(tenant, minio_secret_key)
 
     credentials = {
         "tenant": tenant,
@@ -203,27 +230,27 @@ def main():
             "database": postgres_db_name(tenant),
             "host": "postgres",
             "port": 5432,
-        },
+        } if "postgres" in enabled else None,
         "mongo": {
             "user": tenant,
             "password": mongo_password,
             "database": mongo_db_name(tenant),
             "host": "mongo",
             "port": 27017,
-        },
+        } if "mongo" in enabled else None,
         "redis": {
             "user": tenant,
             "password": redis_password,
             "host": "redis",
             "port": 6379,
-        },
+        } if "redis" in enabled else None,
         "minio": {
             "access_key": tenant,
             "secret_key": minio_secret_key,
             "bucket": tenant,
             "host": "minio",
             "port": 9000,
-        },
+        } if "minio" in enabled else None,
     }
     print(json.dumps(credentials, indent=2))
 

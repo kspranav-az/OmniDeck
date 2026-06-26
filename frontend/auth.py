@@ -1,8 +1,7 @@
-"""Authentication helpers for admin and intern users."""
+"""Authentication helpers for admin and developer users."""
 import os
 import secrets
 from datetime import datetime, timedelta
-from functools import wraps
 
 import bcrypt
 from fastapi import Request, HTTPException, status
@@ -43,10 +42,10 @@ def login_admin(request: Request, db: Session, username: str, password: str) -> 
     return False
 
 
-def login_intern(request: Request, db: Session, username: str, password: str) -> bool:
+def login_developer(request: Request, db: Session, username: str, password: str) -> bool:
     tenant = db.query(Tenant).filter(Tenant.name == username).first()
     if tenant and tenant.login_password_hash and verify_password(password, tenant.login_password_hash):
-        request.session["user_type"] = "intern"
+        request.session["user_type"] = "developer"
         request.session["username"] = username
         request.session["expires"] = (datetime.utcnow() + timedelta(minutes=SESSION_TIMEOUT_MINUTES)).isoformat()
         return True
@@ -61,26 +60,26 @@ def require_admin(request: Request):
     user_type = request.session.get("user_type")
     expires_str = request.session.get("expires")
     if user_type != "admin" or not expires_str:
-        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/admin/login"})
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
     expires = datetime.fromisoformat(expires_str)
     if datetime.utcnow() > expires:
         request.session.clear()
-        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/admin/login"})
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="session expired")
 
 
-def require_intern(request: Request):
+def require_developer(request: Request):
     user_type = request.session.get("user_type")
     expires_str = request.session.get("expires")
-    if user_type != "intern" or not expires_str:
-        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/dashboard/login"})
+    if user_type != "developer" or not expires_str:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
     expires = datetime.fromisoformat(expires_str)
     if datetime.utcnow() > expires:
         request.session.clear()
-        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/dashboard/login"})
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="session expired")
 
 
 def get_current_tenant(request: Request, db: Session) -> Tenant:
-    require_intern(request)
+    require_developer(request)
     username = request.session.get("username")
     tenant = db.query(Tenant).filter(Tenant.name == username).first()
     if not tenant:

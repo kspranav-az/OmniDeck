@@ -1,3 +1,16 @@
+# Stage 1: Build React SPA
+FROM node:20-slim AS node-build
+
+WORKDIR /app
+
+# Install dependencies and build
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+# Stage 2: Python runtime
 FROM python:3.12-slim-bookworm
 
 WORKDIR /app
@@ -39,12 +52,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm /tmp/mongodb-database-tools.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
+# Install Python dependencies
 COPY requirements.txt .
 RUN uv pip install --system -r requirements.txt
 
-# Copy application
+# Copy backend application
 COPY . .
+
+# Copy built React SPA from node-build stage
+COPY --from=node-build /app/dist ./dist
 
 EXPOSE 8000
 

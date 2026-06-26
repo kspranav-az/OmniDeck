@@ -107,8 +107,10 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-admin}
+      OMNIDECK_BACKUP_ROOT: /backups
     volumes:
       - frontend_db:/data
+      - backups:/backups
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./scripts:/opt/omnideck/scripts:ro
     ports:
@@ -127,7 +129,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s
       timeout: 5s
       retries: 5

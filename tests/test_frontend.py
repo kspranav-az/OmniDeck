@@ -1,90 +1,149 @@
-"""Frontend tests for OmniDeck admin and intern dashboards."""
+"""Frontend/API tests for OmniDeck admin and developer dashboards."""
 import os
-import re
 import time
-from urllib.parse import urljoin
 
 import httpx
 import pytest
 
 BASE_URL = "http://omnideck-frontend:8000"
-ADMIN_USER = os.environ.get("ADMIN_USERNAME", "admin")
+NGINX_URL = "http://omnideck-nginx:80"
+ADMIN_USER = "admin"
 ADMIN_PASS = os.environ.get("ADMIN_PASSWORD", "admin")
+
+
+def _wait_for_api(client: httpx.Client, timeout: float = 30):
+    deadline = time.time() + timeout
+    last_error = None
+    while time.time() < deadline:
+        try:
+            resp = client.get("/api/health")
+            if resp.status_code == 200:
+                return
+        except Exception as e:
+            last_error = e
+        time.sleep(0.5)
+    raise RuntimeError(f"API not ready after {timeout}s: {last_error}")
 
 
 @pytest.fixture(scope="module")
 def client():
-    with httpx.Client(base_url=BASE_URL, follow_redirects=True) as c:
+    with httpx.Client(base_url=BASE_URL, follow_redirects=False) as c:
+        _wait_for_api(c)
         yield c
 
 
 def test_health(client):
-    resp = client.get("/health")
+    resp = client.get("/api/health")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
 
 
 def test_admin_login_failure(client):
-    resp = client.post("/admin/login", data={"username": "admin", "password": "wrong"})
+    resp = client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
+    assert resp.status_code == 401
+
+
+def test_admin_tenant_lifecycle(client):
+    # Login
+    resp = client.post("/api/auth/login", json={"username": ADMIN_USER, "password": ADMIN_PASS})
     assert resp.status_code == 200
-    assert "invalid" in resp.text.lower() or "/admin/login" in str(resp.url)
+    assert resp.json()["user_type"] == "admin"
 
-
-def test_admin_login_and_create_tenant(client):
-    # Login as admin
-    resp = client.post("/admin/login", data={"username": ADMIN_USER, "password": ADMIN_PASS})
-    assert resp.status_code == 200
-    assert "/admin" in str(resp.url)
-
-    # Create a tenant
+    # Create tenant with only postgres and redis enabled
     tenant_name = f"fronttest{int(time.time())}"
     start = time.time()
-    resp = client.post("/admin/tenants", data={"name": tenant_name})
+    resp = client.post(
+        "/api/admin/tenants",
+        data={"name": tenant_name, "services": "postgres,redis"},
+    )
     elapsed = time.time() - start
-    assert resp.status_code == 200
-    assert f"/admin/tenants/{tenant_name}/credentials" in str(resp.url)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["name"] == tenant_name
+    assert set(data["enabled_services"]) == {"postgres", "redis"}
+    assert data["credentials"]["postgres"]["user"] is not None
+    assert data["credentials"]["mongo"]["user"] is None
+    assert data["login_password"]
     assert elapsed < 60, f"Tenant creation took {elapsed:.1f}s, expected < 60s"
 
-    # Capture intern login password from credentials page
-    html = resp.text
-    match = re.search(r"Intern Login Password.*?<pre>([A-Za-z0-9_-]+)</pre>", html, re.DOTALL)
-    assert match, "Intern login password not found on credentials page"
-    intern_password = match.group(1)
+    login_password = data["login_password"]
 
-    # Verify tenant appears on dashboard
-    resp = client.get("/admin")
-    assert tenant_name in resp.text
-
-
-def test_intern_dashboard(client):
-    # Create tenant and get intern credentials via admin flow
-    resp = client.post("/admin/login", data={"username": ADMIN_USER, "password": ADMIN_PASS})
+    # List tenants
+    resp = client.get("/api/admin/tenants")
     assert resp.status_code == 200
+    tenants = resp.json()
+    assert any(t["name"] == tenant_name for t in tenants)
 
-    tenant_name = f"interntest{int(time.time())}"
-    resp = client.post("/admin/tenants", data={"name": tenant_name})
+    # Get tenant services
+    resp = client.get(f"/api/admin/tenants/{tenant_name}/services")
     assert resp.status_code == 200
-    html = resp.text
-    match = re.search(r"Intern Login Password.*?<pre>([A-Za-z0-9_-]+)</pre>", html, re.DOTALL)
-    assert match, "Intern login password not found on credentials page"
-    intern_password = match.group(1)
+    svcs = {s["key"]: s["enabled"] for s in resp.json()["services"]}
+    assert svcs["postgres"] is True
+    assert svcs["mongo"] is False
 
-    # Use a separate client session for intern
-    with httpx.Client(base_url=BASE_URL, follow_redirects=True) as intern_client:
-        resp = intern_client.post("/dashboard/login", data={"username": tenant_name, "password": intern_password})
+    # Update services
+    resp = client.put(
+        f"/api/admin/tenants/{tenant_name}/services",
+        json={"enabled": ["postgres", "mongo", "redis", "minio"]},
+    )
+    assert resp.status_code == 200
+    assert set(resp.json()["enabled"]) == {"postgres", "mongo", "redis", "minio"}
+
+    # Admin health
+    resp = client.get("/api/admin/health")
+    assert resp.status_code == 200
+    health = resp.json()
+    assert "containers" in health
+    assert health["tenant_count"] >= 1
+
+    # Login as developer
+    with httpx.Client(base_url=BASE_URL, follow_redirects=False) as dev_client:
+        resp = dev_client.post(
+            "/api/auth/login",
+            json={"username": tenant_name, "password": login_password},
+        )
         assert resp.status_code == 200
-        assert "/dashboard" in str(resp.url)
+        assert resp.json()["user_type"] == "developer"
 
-        # Dashboard should show connection strings and usage
-        resp = intern_client.get("/dashboard")
+        # Developer me
+        resp = dev_client.get("/api/developer/me")
         assert resp.status_code == 200
-        assert tenant_name in resp.text
-        assert "Postgres" in resp.text or "postgres" in resp.text.lower()
+        me = resp.json()
+        assert me["name"] == tenant_name
+        assert set(me["enabled_services"]) == {"postgres", "mongo", "redis", "minio"}
 
-        # Usage API should return metrics
-        resp = intern_client.get("/dashboard/usage")
+        # Developer services
+        resp = dev_client.get("/api/developer/services")
+        assert resp.status_code == 200
+        assert set(resp.json()["enabled"]) == {"postgres", "mongo", "redis", "minio"}
+
+        # Developer usage
+        resp = dev_client.get("/api/developer/usage")
         assert resp.status_code == 200
         usage = resp.json()
         assert "postgres_size_mb" in usage
         assert "mongo_size_mb" in usage
-        assert "redis_key_count" in usage
+
+        # Test service connections
+        for svc in ["postgres", "mongo", "redis", "minio"]:
+            resp = dev_client.post(f"/api/developer/services/{svc}/test")
+            assert resp.status_code == 200, f"{svc} test failed: {resp.text}"
+
+    # Cleanup
+    resp = client.delete(f"/api/admin/tenants/{tenant_name}")
+    assert resp.status_code == 200
+
+
+def test_spa_served(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "OmniDeck" in resp.text or "root" in resp.text.lower()
+
+
+def test_no_intern_terminology(client):
+    resp = client.get("/")
+    html = resp.text.lower()
+    assert "intern" not in html
+    # Also verify API doesn't use "intern"
+    resp = client.get("/api/health")
+    assert "intern" not in resp.text.lower()
