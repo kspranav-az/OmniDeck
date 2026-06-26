@@ -51,11 +51,9 @@ services:
     command: >
       redis-server
       --requirepass ${REDIS_PASSWORD:-redis}
-      --aclfile /usr/local/etc/redis/redis.acl
     volumes:
       - redisdata:/data
       - ./backups/redis:/backups/redis
-      - ./redis.acl:/usr/local/etc/redis/redis.acl:ro
     ports:
       - "16379:6379"
     deploy:
