@@ -105,8 +105,10 @@ cd omnideck
 
 ```bash
 cp .env.example .env
-# Edit .env and set a strong ADMIN_PASSWORD
+# Edit .env and set strong, unique secrets
 ```
+
+> ⚠️ **Never commit `.env` to Git.** It contains secrets and is already listed in `.gitignore`. Only `.env.example` (with placeholder values) should be tracked.
 
 ### 3. Start everything
 
