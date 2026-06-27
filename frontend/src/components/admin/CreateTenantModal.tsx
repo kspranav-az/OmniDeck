@@ -1,17 +1,23 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { ServiceIcon } from '../ServiceIcon'
 import { createTenant } from '../../lib/api'
 import { useToast } from '../../hooks/useToast'
-import { Check } from 'lucide-react'
+import { Check, Loader2 } from 'lucide-react'
 
 const ALL_SERVICES = [
   { key: 'postgres', label: 'PostgreSQL' },
   { key: 'mongo', label: 'MongoDB' },
   { key: 'redis', label: 'Redis' },
   { key: 'minio', label: 'MinIO' },
+]
+
+const STEPS = [
+  { label: 'Validating', description: 'Checking tenant name and services' },
+  { label: 'Provisioning services', description: 'Creating databases, buckets, and credentials' },
+  { label: 'Done', description: 'Tenant ready' },
 ]
 
 interface CreateTenantModalProps {
@@ -24,7 +30,23 @@ export function CreateTenantModal({ isOpen, onClose, onCreated }: CreateTenantMo
   const [name, setName] = useState('')
   const [selected, setSelected] = useState<string[]>(ALL_SERVICES.map((s) => s.key))
   const [isLoading, setIsLoading] = useState(false)
+  const [step, setStep] = useState(0)
   const toast = useToast()
+
+  useEffect(() => {
+    if (!isOpen) {
+      setName('')
+      setSelected(ALL_SERVICES.map((s) => s.key))
+      setStep(0)
+      setIsLoading(false)
+    }
+  }, [isOpen])
+
+  useEffect(() => {
+    if (!isLoading || step !== 0) return
+    const timer = setTimeout(() => setStep(1), 400)
+    return () => clearTimeout(timer)
+  }, [isLoading, step])
 
   const toggle = (key: string) => {
     setSelected((prev) =>
@@ -40,8 +62,10 @@ export function CreateTenantModal({ isOpen, onClose, onCreated }: CreateTenantMo
       return
     }
     setIsLoading(true)
+    setStep(0)
     try {
       const tenant = await createTenant(name, selected)
+      setStep(2)
       toast.addToast(`Tenant "${tenant.name}" created`, 'success')
       onCreated({
         name: tenant.name,
@@ -50,11 +74,15 @@ export function CreateTenantModal({ isOpen, onClose, onCreated }: CreateTenantMo
       })
       setName('')
       setSelected(ALL_SERVICES.map((s) => s.key))
-      onClose()
+      setTimeout(() => {
+        setIsLoading(false)
+        setStep(0)
+        onClose()
+      }, 600)
     } catch (err) {
       toast.addToast(err instanceof Error ? err.message : 'Failed to create tenant', 'error')
-    } finally {
       setIsLoading(false)
+      setStep(0)
     }
   }
 
@@ -65,7 +93,42 @@ export function CreateTenantModal({ isOpen, onClose, onCreated }: CreateTenantMo
       title="Create tenant"
       description="Provision a new tenant with the selected services."
     >
-      <form onSubmit={handleSubmit} className="space-y-5">
+      <form onSubmit={handleSubmit} className="relative space-y-5">
+        {isLoading && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl bg-surface/95 p-6 text-center">
+            <div className="mb-6 flex w-full items-center justify-between">
+              {STEPS.map((s, idx) => (
+                <div key={s.label} className="flex flex-1 flex-col items-center">
+                  <div
+                    className={`flex h-8 w-8 items-center justify-center rounded-full border-2 text-sm font-semibold transition-colors ${
+                      idx <= step
+                        ? 'border-primary bg-primary text-white'
+                        : 'border-surface-light text-muted'
+                    }`}
+                  >
+                    {idx < step ? (
+                      <Check className="h-4 w-4" />
+                    ) : idx === step ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      idx + 1
+                    )}
+                  </div>
+                  <span
+                    className={`mt-2 text-xs font-medium ${
+                      idx <= step ? 'text-foreground' : 'text-muted'
+                    }`}
+                  >
+                    {s.label}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="text-sm font-medium text-foreground">{STEPS[step].label}</p>
+            <p className="text-xs text-muted">{STEPS[step].description}</p>
+          </div>
+        )}
+
         <div>
           <label className="mb-1.5 block text-sm font-medium text-foreground">
             Tenant name
@@ -74,6 +137,7 @@ export function CreateTenantModal({ isOpen, onClose, onCreated }: CreateTenantMo
             value={name}
             onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
             placeholder="acme-corp"
+            disabled={isLoading}
           />
           <p className="mt-1 text-xs text-muted">Lowercase letters, numbers, dashes, underscores.</p>
         </div>
@@ -88,6 +152,7 @@ export function CreateTenantModal({ isOpen, onClose, onCreated }: CreateTenantMo
                   key={svc.key}
                   type="button"
                   onClick={() => toggle(svc.key)}
+                  disabled={isLoading}
                   className={`flex items-center gap-3 rounded-xl border p-4 text-left transition-all duration-200 ${
                     checked
                       ? 'border-primary/40 bg-primary/10'
@@ -110,7 +175,7 @@ export function CreateTenantModal({ isOpen, onClose, onCreated }: CreateTenantMo
         </div>
 
         <div className="flex justify-end gap-3 pt-2">
-          <Button type="button" variant="secondary" onClick={onClose}>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={isLoading}>
             Cancel
           </Button>
           <Button type="submit" isLoading={isLoading}>

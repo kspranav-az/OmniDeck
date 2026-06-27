@@ -2,9 +2,13 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './hooks/useAuth'
 import { ToastProvider } from './hooks/useToast'
 import { ToastContainer } from './components/Toast'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { OfflineBanner } from './components/OfflineBanner'
+import { CommandPalette } from './components/CommandPalette'
 import Login from './pages/Login'
 import AdminDashboard from './pages/AdminDashboard'
 import DeveloperDashboard from './pages/DeveloperDashboard'
+import TenantDetail from './pages/TenantDetail'
 
 function ProtectedRoute({
   children,
@@ -44,6 +48,14 @@ function Router() {
         }
       />
       <Route
+        path="/admin/tenants/:name"
+        element={
+          <ProtectedRoute allowed="admin">
+            <TenantDetail />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/dashboard"
         element={
           <ProtectedRoute allowed="developer">
@@ -59,12 +71,22 @@ function Router() {
 export default function App() {
   return (
     <BrowserRouter>
-      <ToastProvider>
-        <AuthProvider>
-          <Router />
-          <ToastContainer />
-        </AuthProvider>
-      </ToastProvider>
+      <a
+        href="#main-content"
+        className="sr-only"
+      >
+        Skip to main content
+      </a>
+      <ErrorBoundary>
+        <ToastProvider>
+          <AuthProvider>
+            <OfflineBanner />
+            <Router />
+            <CommandPalette />
+            <ToastContainer />
+          </AuthProvider>
+        </ToastProvider>
+      </ErrorBoundary>
     </BrowserRouter>
   )
 }

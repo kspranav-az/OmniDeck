@@ -19,16 +19,16 @@ export function Tabs({
   onValueChange?: (value: string) => void
   children: ReactNode
 }) {
-  const [internal, setInternal] = useState(defaultValue)
+  const [localValue, setLocalValue] = useState(defaultValue)
   const controlled = value !== undefined
-  const active = controlled ? value : internal
+  const active = controlled ? value : localValue
   return (
     <TabsContext.Provider
       value={{
         value: active ?? '',
         onChange: (v) => {
           onValueChange?.(v)
-          if (!controlled) setInternal(v)
+          if (!controlled) setLocalValue(v)
         },
       }}
     >

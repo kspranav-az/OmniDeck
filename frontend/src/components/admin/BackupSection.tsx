@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../ui/Button'
 import { Badge } from '../ui/Badge'
 import { Skeleton } from '../ui/Skeleton'
@@ -9,14 +9,19 @@ import {
   createBackup,
   restoreBackup,
   snapshotVolume,
+  getVolumes,
+  getJobStatus,
   type Backup,
   type Tenant,
 } from '../../lib/api'
 import { useToast } from '../../hooks/useToast'
+import { useInterval } from '../../hooks/useInterval'
+import { formatBytes, formatRelativeTime } from '../../lib/utils'
 import { VolumeRestoreModal } from './VolumeRestoreModal'
-import { Archive, RotateCcw, Database, HardDrive, Camera } from 'lucide-react'
+import { Archive, RotateCcw, Database, HardDrive, Camera, Loader2 } from 'lucide-react'
 
 const BACKUP_SERVICES = ['postgres', 'mongo', 'redis']
+const JOB_POLL_MS = 2000
 
 interface BackupSectionProps {
   tenants: Tenant[]
@@ -24,6 +29,7 @@ interface BackupSectionProps {
 
 export function BackupSection({ tenants }: BackupSectionProps) {
   const [backups, setBackups] = useState<Backup[]>([])
+  const [volumes, setVolumes] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [restoring, setRestoring] = useState<string | null>(null)
   const [backingUp, setBackingUp] = useState<string | null>(null)
@@ -31,7 +37,13 @@ export function BackupSection({ tenants }: BackupSectionProps) {
   const [volumeModalPath, setVolumeModalPath] = useState<string | undefined>()
   const [snapshotVolumeKey, setSnapshotVolumeKey] = useState<string | null>(null)
   const [snapshotting, setSnapshotting] = useState(false)
+  const [jobs, setJobs] = useState<string[]>([])
+  const jobsRef = useRef(jobs)
   const toast = useToast()
+
+  useEffect(() => {
+    jobsRef.current = jobs
+  }, [jobs])
 
   const load = async () => {
     try {
@@ -48,6 +60,55 @@ export function BackupSection({ tenants }: BackupSectionProps) {
     load()
   }, [])
 
+  useInterval(
+    () => {
+      load()
+    },
+    10000,
+  )
+
+  const pollJobs = useCallback(async () => {
+    for (const id of jobsRef.current) {
+      try {
+        const job = await getJobStatus(id)
+        if (job.status === 'completed' || job.status === 'failed') {
+          setJobs((prev) => prev.filter((j) => j !== id))
+          toast.addToast(
+            `${job.operation} ${job.target} ${job.status}`,
+            job.status === 'completed' ? 'success' : 'error',
+          )
+          await load()
+        }
+      } catch {
+        setJobs((prev) => prev.filter((j) => j !== id))
+      }
+    }
+  }, [toast])
+
+  useInterval(pollJobs, jobs.length > 0 ? JOB_POLL_MS : null)
+
+  useEffect(() => {
+    if (snapshotVolumeKey === null) return
+    let cancelled = false
+    getVolumes()
+      .then((data) => {
+        if (cancelled) return
+        const names = data.volumes.map((v) => v.name)
+        setVolumes(names)
+        if (!snapshotVolumeKey || !names.includes(snapshotVolumeKey)) {
+          setSnapshotVolumeKey(names[0] || '')
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          toast.addToast(err instanceof Error ? err.message : 'Failed to load volumes', 'error')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [snapshotVolumeKey === null])
+
   const grouped = useMemo(() => {
     const map: Record<string, Backup[]> = {}
     for (const b of backups) {
@@ -58,11 +119,17 @@ export function BackupSection({ tenants }: BackupSectionProps) {
     return map
   }, [backups])
 
+  const trackJob = (jobId: string | undefined) => {
+    if (!jobId) return
+    setJobs((prev) => (prev.includes(jobId) ? prev : [...prev, jobId]))
+  }
+
   const handleBackup = async (service: string, tenant: string) => {
     const id = `${service}-${tenant}`
     setBackingUp(id)
     try {
-      await createBackup(service, tenant)
+      const result = await createBackup(service, tenant)
+      trackJob(result.job_id)
       toast.addToast(`${service} backup started for ${tenant}`, 'success')
       await load()
     } catch (err) {
@@ -76,7 +143,8 @@ export function BackupSection({ tenants }: BackupSectionProps) {
     if (!backup.tenant) return
     setRestoring(backup.path)
     try {
-      await restoreBackup(backup.service, backup.tenant, backup.path)
+      const result = await restoreBackup(backup.service, backup.tenant, backup.path)
+      trackJob(result.job_id)
       toast.addToast(`${backup.service} restore started for ${backup.tenant}`, 'success')
       setRestoreTarget(null)
     } catch (err) {
@@ -89,10 +157,12 @@ export function BackupSection({ tenants }: BackupSectionProps) {
   const backupFileName = (path: string) => path.split('/').pop() || path
 
   const handleSnapshot = async (volume: string) => {
+    if (!volume) return
     setSnapshotting(true)
     try {
-      await snapshotVolume(volume)
-      toast.addToast(`Snapshot created for ${volume}`, 'success')
+      const result = await snapshotVolume(volume)
+      trackJob(result.job_id)
+      toast.addToast(`Snapshot started for ${volume}`, 'success')
       setSnapshotVolumeKey(null)
       await load()
     } catch (err) {
@@ -101,6 +171,26 @@ export function BackupSection({ tenants }: BackupSectionProps) {
       setSnapshotting(false)
     }
   }
+
+  const renderBackupMeta = (backup: Backup) => (
+    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
+      <span>{formatBytes(backup.size_bytes)}</span>
+      <span>•</span>
+      <span>{formatRelativeTime(backup.created_at)}</span>
+      <Badge
+        variant={
+          backup.status === 'completed' ? 'success' : backup.status === 'failed' ? 'danger' : 'warning'
+        }
+      >
+        {backup.status}
+      </Badge>
+      {jobs.some((j) => backup.path.includes(j)) && (
+        <Badge variant="default">
+          <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> in progress
+        </Badge>
+      )}
+    </div>
+  )
 
   return (
     <div className="space-y-8">
@@ -173,21 +263,23 @@ export function BackupSection({ tenants }: BackupSectionProps) {
                             {serviceBackups.map((backup) => (
                               <li
                                 key={backup.path}
-                                className="flex items-center justify-between rounded-md border border-surface-light bg-surface px-3 py-2"
+                                className="flex flex-col gap-2 rounded-md border border-surface-light bg-surface px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
                               >
-                                <span className="font-mono text-xs text-muted truncate max-w-[60%]">
-                                  {backupFileName(backup.path)}
-                                </span>
-                                <div className="flex items-center gap-2">
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    isLoading={restoring === backup.path}
-                                    onClick={() => setRestoreTarget(backup)}
-                                  >
-                                    <RotateCcw className="h-3.5 w-3.5" /> Restore
-                                  </Button>
+                                <div className="min-w-0">
+                                  <p className="font-mono text-xs text-muted truncate max-w-[260px] sm:max-w-md">
+                                    {backupFileName(backup.path)}
+                                  </p>
+                                  {renderBackupMeta(backup)}
                                 </div>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  isLoading={restoring === backup.path}
+                                  onClick={() => setRestoreTarget(backup)}
+                                  aria-label={`Restore ${backupFileName(backup.path)}`}
+                                >
+                                  <RotateCcw className="h-3.5 w-3.5" /> Restore
+                                </Button>
                               </li>
                             ))}
                           </ul>
@@ -215,7 +307,8 @@ export function BackupSection({ tenants }: BackupSectionProps) {
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => setSnapshotVolumeKey('omnideck_redisdata')}
+            onClick={() => setSnapshotVolumeKey('')}
+            aria-label="Create volume snapshot"
           >
             <Camera className="h-4 w-4" /> Snapshot
           </Button>
@@ -231,18 +324,22 @@ export function BackupSection({ tenants }: BackupSectionProps) {
               {(grouped['volume'] || []).map((backup) => (
                 <li
                   key={backup.path}
-                  className="flex items-center justify-between rounded-lg border border-surface-light bg-background px-3 py-2"
+                  className="flex flex-col gap-2 rounded-lg border border-surface-light bg-background px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
                 >
-                  <div className="flex items-center gap-2">
-                    <HardDrive className="h-4 w-4 text-muted" />
-                    <span className="font-mono text-xs text-muted truncate max-w-[200px] sm:max-w-md">
-                      {backupFileName(backup.path)}
-                    </span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <HardDrive className="h-4 w-4 text-muted" />
+                      <span className="font-mono text-xs text-muted truncate max-w-[200px] sm:max-w-md">
+                        {backupFileName(backup.path)}
+                      </span>
+                    </div>
+                    {renderBackupMeta(backup)}
                   </div>
                   <Button
                     size="sm"
                     variant="secondary"
                     onClick={() => setVolumeModalPath(backup.path)}
+                    aria-label={`Restore ${backupFileName(backup.path)}`}
                   >
                     <Archive className="h-3.5 w-3.5" /> Restore
                   </Button>
@@ -273,10 +370,7 @@ export function BackupSection({ tenants }: BackupSectionProps) {
               <Button variant="secondary" onClick={() => setRestoreTarget(null)}>
                 Cancel
               </Button>
-              <Button
-                isLoading={!!restoring}
-                onClick={() => handleRestore(restoreTarget)}
-              >
+              <Button isLoading={!!restoring} onClick={() => handleRestore(restoreTarget)}>
                 <RotateCcw className="h-4 w-4" /> Restore
               </Button>
             </div>
@@ -291,16 +385,30 @@ export function BackupSection({ tenants }: BackupSectionProps) {
       />
 
       <Modal
-        isOpen={!!snapshotVolumeKey}
+        isOpen={snapshotVolumeKey !== null}
         onClose={() => setSnapshotVolumeKey(null)}
         title="Create volume snapshot"
         description="Choose a Docker volume to snapshot."
       >
-        {snapshotVolumeKey && (
+        {snapshotVolumeKey !== null && (
           <div className="space-y-4">
-            <p className="text-sm text-foreground">
-              Snapshot volume <Badge>{snapshotVolumeKey}</Badge>?
-            </p>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-foreground">
+                Volume
+              </label>
+              <select
+                value={snapshotVolumeKey}
+                onChange={(e) => setSnapshotVolumeKey(e.target.value)}
+                className="input w-full"
+              >
+                {volumes.length === 0 && <option value="">Loading volumes...</option>}
+                {volumes.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="flex justify-end gap-3">
               <Button variant="secondary" onClick={() => setSnapshotVolumeKey(null)}>
                 Cancel
@@ -308,6 +416,7 @@ export function BackupSection({ tenants }: BackupSectionProps) {
               <Button
                 isLoading={snapshotting}
                 onClick={() => handleSnapshot(snapshotVolumeKey)}
+                disabled={!snapshotVolumeKey}
               >
                 <Camera className="h-4 w-4" /> Snapshot
               </Button>

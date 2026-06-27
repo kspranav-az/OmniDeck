@@ -72,6 +72,23 @@ class Tenant(Base):
         return any(s.key == service_key for s in self.enabled_services)
 
 
+class UsageSnapshot(Base):
+    __tablename__ = "usage_snapshots"
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    recorded_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    postgres_size_mb = Column(Integer)
+    postgres_table_count = Column(Integer)
+    mongo_size_mb = Column(Integer)
+    mongo_collection_count = Column(Integer)
+    redis_key_count = Column(Integer)
+    minio_size_bytes = Column(Integer)
+    minio_object_count = Column(Integer)
+
+    tenant = relationship("Tenant")
+
+
 def get_db():
     db = SessionLocal()
     try:

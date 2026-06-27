@@ -1,5 +1,19 @@
 import type { Credentials } from './api'
 
+export const SERVICE_COLORS: Record<string, string> = {
+  postgres: '#3B82F6',
+  mongo: '#22C55E',
+  redis: '#EF4444',
+  minio: '#F59E0B',
+}
+
+export const SERVICE_DOCS: Record<string, string> = {
+  postgres: '#docs-postgres',
+  mongo: '#docs-mongo',
+  redis: '#docs-redis',
+  minio: '#docs-minio',
+}
+
 export function getConnectionString(service: string, creds: Credentials): string {
   switch (service) {
     case 'postgres':

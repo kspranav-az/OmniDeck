@@ -51,6 +51,40 @@ export interface Backup {
   service: string
   tenant: string | null
   path: string
+  size_bytes: number
+  created_at: string
+  status: string
+}
+
+export interface ServiceHealth {
+  key: string
+  status: 'ok' | 'error'
+  latency_ms: number
+  error: string | null
+}
+
+export interface UsageHistoryPoint {
+  hour: string
+  value: number
+}
+
+export interface UsageHistoryResponse {
+  service: string
+  tenant: string
+  points: UsageHistoryPoint[]
+}
+
+export interface Volume {
+  name: string
+}
+
+export interface Job {
+  id: string
+  operation: string
+  target: string
+  status: 'running' | 'completed' | 'failed'
+  created_at: string
+  error: string | null
 }
 
 export interface Usage {
@@ -143,6 +177,36 @@ export async function getHealth(): Promise<Health> {
   return handleResponse<Health>(await fetch(`${API_BASE}/admin/health`))
 }
 
+export async function getServiceHealth(): Promise<{ services: ServiceHealth[] }> {
+  return handleResponse<{ services: ServiceHealth[] }>(await fetch(`${API_BASE}/admin/health/services`))
+}
+
+export async function getUsageHistory(
+  tenant: string,
+  service?: string,
+  hours = 24,
+): Promise<UsageHistoryResponse> {
+  const params = new URLSearchParams()
+  params.append('tenant', tenant)
+  if (service) params.append('service', service)
+  params.append('hours', String(hours))
+  return handleResponse<UsageHistoryResponse>(
+    await fetch(`${API_BASE}/admin/usage-history?${params.toString()}`),
+  )
+}
+
+export async function getVolumes(): Promise<{ volumes: Volume[] }> {
+  const data = await handleResponse<{ volumes: string[] }>(await fetch(`${API_BASE}/admin/volumes`))
+  return { volumes: data.volumes.map((name) => ({ name })) }
+}
+
+export async function getJobStatus(jobId: string): Promise<Job> {
+  const data = await handleResponse<{ job: Job }>(
+    await fetch(`${API_BASE}/admin/jobs/${encodeURIComponent(jobId)}`),
+  )
+  return data.job
+}
+
 export async function listBackups(service?: string, tenant?: string): Promise<Backup[]> {
   const params = new URLSearchParams()
   if (service) params.append('service', service)
@@ -152,11 +216,11 @@ export async function listBackups(service?: string, tenant?: string): Promise<Ba
   return data.backups
 }
 
-export async function createBackup(service: string, tenant: string): Promise<void> {
+export async function createBackup(service: string, tenant: string): Promise<{ status: string; job_id: string }> {
   const form = new FormData()
   form.append('service', service)
   form.append('tenant', tenant)
-  await handleResponse<{ status: string }>(
+  return handleResponse<{ status: string; job_id: string }>(
     await fetch(`${API_BASE}/admin/backups`, {
       method: 'POST',
       body: form,
@@ -164,12 +228,16 @@ export async function createBackup(service: string, tenant: string): Promise<voi
   )
 }
 
-export async function restoreBackup(service: string, tenant: string, path: string): Promise<void> {
+export async function restoreBackup(
+  service: string,
+  tenant: string,
+  path: string,
+): Promise<{ status: string; job_id: string }> {
   const form = new FormData()
   form.append('service', service)
   form.append('tenant', tenant)
   form.append('path', path)
-  await handleResponse<{ status: string }>(
+  return handleResponse<{ status: string; job_id: string }>(
     await fetch(`${API_BASE}/admin/restore`, {
       method: 'POST',
       body: form,
@@ -177,12 +245,16 @@ export async function restoreBackup(service: string, tenant: string, path: strin
   )
 }
 
-export async function restoreVolume(volume: string, path: string, service: string): Promise<void> {
+export async function restoreVolume(
+  volume: string,
+  path: string,
+  service: string,
+): Promise<{ status: string; job_id: string }> {
   const form = new FormData()
   form.append('volume', volume)
   form.append('path', path)
   form.append('service', service)
-  await handleResponse<{ status: string }>(
+  return handleResponse<{ status: string; job_id: string }>(
     await fetch(`${API_BASE}/admin/restore-volume`, {
       method: 'POST',
       body: form,
@@ -190,10 +262,10 @@ export async function restoreVolume(volume: string, path: string, service: strin
   )
 }
 
-export async function snapshotVolume(volume: string): Promise<void> {
+export async function snapshotVolume(volume: string): Promise<{ status: string; job_id: string }> {
   const form = new FormData()
   form.append('volume', volume)
-  await handleResponse<{ status: string }>(
+  return handleResponse<{ status: string; job_id: string }>(
     await fetch(`${API_BASE}/admin/snapshot-volume`, {
       method: 'POST',
       body: form,

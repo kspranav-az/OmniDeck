@@ -4,7 +4,9 @@ import json
 import os
 import re
 import subprocess
-from datetime import datetime
+import time
+import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -17,6 +19,7 @@ from fastapi import FastAPI, Request, Form, Depends, HTTPException, status, Quer
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -31,7 +34,7 @@ from auth import (
     require_developer,
     seed_admin,
 )
-from models import Tenant, Service, get_db, init_db, seed_services
+from models import Tenant, Service, UsageSnapshot, SessionLocal, get_db, init_db, seed_services
 
 app = FastAPI(title="OmniDeck")
 app.add_middleware(
@@ -44,6 +47,32 @@ app.add_middleware(
 STATIC_DIR = Path(__file__).parent / "dist"
 if STATIC_DIR.exists():
     app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+
+# In-memory job registry for long-running admin operations.
+jobs: dict[str, dict] = {}
+
+
+# -----------------------------------------------------------------------------
+# Job helpers
+# -----------------------------------------------------------------------------
+def _start_job(operation: str, target: str) -> str:
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "id": job_id,
+        "operation": operation,
+        "target": target,
+        "status": "running",
+        "created_at": datetime.utcnow().isoformat(),
+        "error": None,
+    }
+    return job_id
+
+
+def _finish_job(job_id: str, success: bool = True, error: Optional[str] = None):
+    if job_id not in jobs:
+        return
+    jobs[job_id]["status"] = "completed" if success else "failed"
+    jobs[job_id]["error"] = error
 
 
 # -----------------------------------------------------------------------------
@@ -404,17 +433,167 @@ def _parse_docker_size(value: str) -> int:
         return 0
 
 
+@app.get("/api/admin/health/services")
+def api_admin_health_services(request: Request):
+    require_admin(request)
+
+    def _check(name: str, checker):
+        start = time.perf_counter()
+        try:
+            checker()
+            return {
+                "key": name,
+                "status": "ok",
+                "latency_ms": round((time.perf_counter() - start) * 1000, 2),
+                "error": None,
+            }
+        except Exception as e:
+            return {
+                "key": name,
+                "status": "error",
+                "latency_ms": round((time.perf_counter() - start) * 1000, 2),
+                "error": str(e),
+            }
+
+    def _check_postgres():
+        user = os.environ.get("POSTGRES_USER", "postgres")
+        password = os.environ.get("POSTGRES_PASSWORD", "")
+        conn = psycopg.connect(
+            host="postgres", port=5432, user=user, password=password, dbname="postgres", connect_timeout=5
+        )
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.close()
+        conn.close()
+
+    def _check_mongo():
+        user = os.environ.get("MONGO_INITDB_ROOT_USERNAME", "")
+        password = os.environ.get("MONGO_INITDB_ROOT_PASSWORD", "")
+        client = pymongo.MongoClient(
+            "mongo:27017",
+            username=user,
+            password=password,
+            authSource="admin",
+            serverSelectionTimeoutMS=5000,
+        )
+        client.admin.command("ping")
+        client.close()
+
+    def _check_redis():
+        password = os.environ.get("REDIS_PASSWORD", "")
+        r = redis.Redis(host="redis", port=6379, password=password, socket_connect_timeout=5)
+        r.ping()
+        r.close()
+
+    def _check_minio():
+        from minio import Minio
+        access_key = os.environ.get("MINIO_ROOT_USER", "")
+        secret_key = os.environ.get("MINIO_ROOT_PASSWORD", "")
+        mc = Minio("minio:9000", access_key=access_key, secret_key=secret_key, secure=False)
+        mc.list_buckets()
+
+    services = [
+        _check("postgres", _check_postgres),
+        _check("mongo", _check_mongo),
+        _check("redis", _check_redis),
+        _check("minio", _check_minio),
+    ]
+    return {"services": services}
+
+
+# -----------------------------------------------------------------------------
+# Usage history (admin only)
+# -----------------------------------------------------------------------------
+@app.get("/api/admin/usage-history")
+def api_admin_usage_history(
+    request: Request,
+    tenant: str = Query(...),
+    service: str = Query(...),
+    hours: int = Query(24),
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    valid_services = {"postgres", "mongo", "redis", "minio"}
+    if service not in valid_services:
+        raise HTTPException(status_code=400, detail="invalid service")
+
+    tenant_obj = db.query(Tenant).filter(Tenant.name == tenant).first()
+    if not tenant_obj:
+        raise HTTPException(status_code=404, detail="tenant not found")
+
+    if service in ("postgres", "mongo"):
+        value_col = getattr(UsageSnapshot, f"{service}_size_mb")
+    elif service == "redis":
+        value_col = UsageSnapshot.redis_key_count
+    else:  # minio
+        value_col = UsageSnapshot.minio_size_bytes
+
+    since = datetime.utcnow() - timedelta(hours=hours)
+    rows = (
+        db.query(
+            func.strftime("%Y-%m-%dT%H:00:00", UsageSnapshot.recorded_at).label("hour"),
+            func.avg(value_col).label("avg_value"),
+        )
+        .filter(
+            UsageSnapshot.tenant_id == tenant_obj.id,
+            UsageSnapshot.recorded_at >= since,
+        )
+        .group_by("hour")
+        .order_by("hour")
+        .all()
+    )
+
+    points = [{"hour": row.hour, "value": round(row.avg_value, 2) if row.avg_value is not None else 0} for row in rows]
+    return {"service": service, "tenant": tenant, "points": points}
+
+
 # -----------------------------------------------------------------------------
 # Backup / Restore API (admin only)
 # -----------------------------------------------------------------------------
+def _backup_size_bytes(path: str) -> int:
+    if os.path.isfile(path):
+        return os.path.getsize(path)
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            if os.path.isfile(fp):
+                total += os.path.getsize(fp)
+    return total
+
+
+def _backup_status(path: str, service: str, tenant: Optional[str]) -> str:
+    for job in jobs.values():
+        if job.get("status") != "running":
+            continue
+        target = job.get("target", "")
+        if service == "volume":
+            if job["operation"] == "snapshot-volume" and target and target in path:
+                return "in_progress"
+            if job["operation"] == "restore-volume" and target == path:
+                return "in_progress"
+        else:
+            if target == f"{service}:{tenant}":
+                return "in_progress"
+            if target.startswith(f"restore:{service}:{tenant}:") and path in target:
+                return "in_progress"
+    return "available"
+
+
 @app.post("/api/admin/snapshot-volume")
 def api_admin_snapshot_volume(
     request: Request,
     volume: str = Form(...),
 ):
     require_admin(request)
-    subprocess.run(["/opt/omnideck/scripts/snapshot_volume.sh", volume], check=True)
-    return {"status": "snapshot created"}
+    job_id = _start_job("snapshot-volume", volume)
+    try:
+        subprocess.run(["/opt/omnideck/scripts/snapshot_volume.sh", volume], check=True, timeout=300)
+        _finish_job(job_id, success=True)
+    except subprocess.CalledProcessError as e:
+        _finish_job(job_id, success=False, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "snapshot created", "job_id": job_id}
 
 
 @app.get("/api/admin/backups")
@@ -428,17 +607,48 @@ def api_admin_backups(
     backups = []
     if service in (None, "postgres"):
         for f in glob.glob(f"{root}/postgres/{tenant or '*'}_*.dump"):
-            backups.append({"service": "postgres", "tenant": Path(f).stem.split("_")[0], "path": f})
+            b_tenant = Path(f).stem.split("_")[0]
+            backups.append({
+                "service": "postgres",
+                "tenant": b_tenant,
+                "path": f,
+                "size_bytes": _backup_size_bytes(f),
+                "created_at": datetime.fromtimestamp(os.path.getmtime(f)).isoformat(),
+                "status": _backup_status(f, "postgres", b_tenant),
+            })
     if service in (None, "mongo"):
         for d in glob.glob(f"{root}/mongo/{tenant or '*'}_*"):
             if os.path.isdir(d):
-                backups.append({"service": "mongo", "tenant": Path(d).stem.split("_")[0], "path": d})
+                b_tenant = Path(d).stem.split("_")[0]
+                backups.append({
+                    "service": "mongo",
+                    "tenant": b_tenant,
+                    "path": d,
+                    "size_bytes": _backup_size_bytes(d),
+                    "created_at": datetime.fromtimestamp(os.path.getmtime(d)).isoformat(),
+                    "status": _backup_status(d, "mongo", b_tenant),
+                })
     if service in (None, "redis"):
         for f in glob.glob(f"{root}/redis/{tenant or '*'}_*.rdb"):
-            backups.append({"service": "redis", "tenant": Path(f).stem.split("_")[0], "path": f})
+            b_tenant = Path(f).stem.split("_")[0]
+            backups.append({
+                "service": "redis",
+                "tenant": b_tenant,
+                "path": f,
+                "size_bytes": _backup_size_bytes(f),
+                "created_at": datetime.fromtimestamp(os.path.getmtime(f)).isoformat(),
+                "status": _backup_status(f, "redis", b_tenant),
+            })
     if service in (None, "volume"):
         for f in glob.glob(f"{root}/volumes/*_*.tar.gz"):
-            backups.append({"service": "volume", "tenant": None, "path": f})
+            backups.append({
+                "service": "volume",
+                "tenant": None,
+                "path": f,
+                "size_bytes": _backup_size_bytes(f),
+                "created_at": datetime.fromtimestamp(os.path.getmtime(f)).isoformat(),
+                "status": _backup_status(f, "volume", None),
+            })
     backups.sort(key=lambda x: x["path"], reverse=True)
     return {"backups": backups}
 
@@ -450,15 +660,22 @@ def api_admin_create_backup(
     tenant: str = Form(...),
 ):
     require_admin(request)
-    if service == "postgres":
-        subprocess.run(["/opt/omnideck/scripts/backup_postgres.sh", tenant], check=True)
-    elif service == "mongo":
-        subprocess.run(["/opt/omnideck/scripts/backup_mongo.sh", tenant], check=True)
-    elif service == "redis":
-        subprocess.run(["python", "/opt/omnideck/scripts/backup_redis.py", tenant], check=True)
-    else:
-        raise HTTPException(status_code=400, detail="unsupported service for backup")
-    return {"status": "backup started"}
+    target = f"{service}:{tenant}"
+    job_id = _start_job("backup", target)
+    try:
+        if service == "postgres":
+            subprocess.run(["/opt/omnideck/scripts/backup_postgres.sh", tenant], check=True, timeout=300)
+        elif service == "mongo":
+            subprocess.run(["/opt/omnideck/scripts/backup_mongo.sh", tenant], check=True, timeout=300)
+        elif service == "redis":
+            subprocess.run(["python", "/opt/omnideck/scripts/backup_redis.py", tenant], check=True, timeout=300)
+        else:
+            raise HTTPException(status_code=400, detail="unsupported service for backup")
+        _finish_job(job_id, success=True)
+    except subprocess.CalledProcessError as e:
+        _finish_job(job_id, success=False, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "backup started", "job_id": job_id}
 
 
 @app.post("/api/admin/restore")
@@ -469,18 +686,25 @@ def api_admin_restore(
     path: str = Form(...),
 ):
     require_admin(request)
-    if service == "postgres":
-        subprocess.run(["/opt/omnideck/scripts/restore_postgres.sh", tenant, path], check=True)
-    elif service == "mongo":
-        subprocess.run(["/opt/omnideck/scripts/restore_mongo.sh", tenant, path], check=True)
-    elif service == "redis":
-        subprocess.run(["python", "/opt/omnideck/scripts/restore_redis.py", tenant, path], check=True)
-    elif service == "volume":
-        # path format: <volume_name> <backup_file> <service_name>
-        raise HTTPException(status_code=400, detail="use dedicated volume restore endpoint")
-    else:
-        raise HTTPException(status_code=400, detail="unsupported service for restore")
-    return {"status": "restored"}
+    target = f"restore:{service}:{tenant}:{path}"
+    job_id = _start_job("restore", target)
+    try:
+        if service == "postgres":
+            subprocess.run(["/opt/omnideck/scripts/restore_postgres.sh", tenant, path], check=True, timeout=300)
+        elif service == "mongo":
+            subprocess.run(["/opt/omnideck/scripts/restore_mongo.sh", tenant, path], check=True, timeout=300)
+        elif service == "redis":
+            subprocess.run(["python", "/opt/omnideck/scripts/restore_redis.py", tenant, path], check=True, timeout=300)
+        elif service == "volume":
+            _finish_job(job_id, success=False, error="use dedicated volume restore endpoint")
+            raise HTTPException(status_code=400, detail="use dedicated volume restore endpoint")
+        else:
+            raise HTTPException(status_code=400, detail="unsupported service for restore")
+        _finish_job(job_id, success=True)
+    except subprocess.CalledProcessError as e:
+        _finish_job(job_id, success=False, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "restored", "job_id": job_id}
 
 
 @app.post("/api/admin/restore-volume")
@@ -491,8 +715,38 @@ def api_admin_restore_volume(
     service: str = Form(...),
 ):
     require_admin(request)
-    subprocess.run(["/opt/omnideck/scripts/restore_volume.sh", volume, path, service], check=True)
-    return {"status": "volume restored"}
+    target = f"restore-volume:{volume}:{path}"
+    job_id = _start_job("restore-volume", target)
+    try:
+        subprocess.run(["/opt/omnideck/scripts/restore_volume.sh", volume, path, service], check=True, timeout=300)
+        _finish_job(job_id, success=True)
+    except subprocess.CalledProcessError as e:
+        _finish_job(job_id, success=False, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "volume restored", "job_id": job_id}
+
+
+@app.get("/api/admin/jobs/{job_id}")
+def api_admin_job_status(request: Request, job_id: str):
+    require_admin(request)
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    return {"job": job}
+
+
+# -----------------------------------------------------------------------------
+# Volume discovery (admin only)
+# -----------------------------------------------------------------------------
+@app.get("/api/admin/volumes")
+def api_admin_volumes(request: Request):
+    require_admin(request)
+    try:
+        client = docker.DockerClient(base_url="unix://var/run/docker.sock", timeout=3)
+        volumes = [v.name for v in client.volumes.list() if v.name.startswith("omnideck_")]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"volumes": sorted(volumes)}
 
 
 # -----------------------------------------------------------------------------
@@ -637,6 +891,27 @@ def get_tenant_usage(tenant: Tenant) -> dict:
             usage["minio_size_bytes"] = sum(obj.size or 0 for obj in obj_list)
         except Exception as e:
             usage["minio_error"] = str(e)
+
+    # Persist a usage snapshot using a fresh session so callers are not coupled
+    # to an active database transaction.
+    try:
+        db = SessionLocal()
+        snapshot = UsageSnapshot(
+            tenant_id=tenant.id,
+            postgres_size_mb=usage.get("postgres_size_mb"),
+            postgres_table_count=usage.get("postgres_table_count"),
+            mongo_size_mb=usage.get("mongo_size_mb"),
+            mongo_collection_count=usage.get("mongo_collection_count"),
+            redis_key_count=usage.get("redis_key_count"),
+            minio_size_bytes=usage.get("minio_size_bytes"),
+            minio_object_count=usage.get("minio_object_count"),
+        )
+        db.add(snapshot)
+        db.commit()
+    except Exception:
+        pass
+    finally:
+        db.close()
 
     return usage
 
