@@ -110,13 +110,23 @@ cp .env.example .env
 
 > ⚠️ **Never commit `.env` to Git.** It contains secrets and is already listed in `.gitignore`. Only `.env.example` (with placeholder values) should be tracked.
 
-### 3. Start everything
+### 3. Generate a self-signed origin certificate (for HTTPS / Cloudflare)
+
+OmniDeck's nginx terminates TLS from Cloudflare using a self-signed origin certificate. Cloudflare presents its own trusted certificate to visitors, so the origin certificate does not need to be publicly trusted.
+
+```bash
+./scripts/generate-self-signed-cert.sh
+```
+
+> Skip this step if you are only running locally over HTTP.
+
+### 4. Start everything
 
 ```bash
 docker compose up -d
 ```
 
-### 4. Open the dashboard
+### 5. Open the dashboard
 
 ```
 http://localhost
@@ -164,6 +174,22 @@ All configuration is via environment variables in `.env`:
 See `.env.example` for the full list.
 
 ---
+
+## 🌐 Deploying with Cloudflare
+
+If you expose OmniDeck on a public domain:
+
+1. Point your domain's DNS A record to your server's public IP.
+2. Enable the Cloudflare proxy (orange cloud) for the record.
+3. In **SSL/TLS → Overview**, select **Full** mode. Do **not** use "Flexible" — it will cause redirect loops.
+4. Generate the origin certificate on the server:
+   ```bash
+   ./scripts/generate-self-signed-cert.sh your-domain.com
+   docker compose up -d --force-recreate nginx
+   ```
+5. Allow Cloudflare IP ranges in your server's firewall for ports `80`, `443`, `5432`, `27017`, `6379`, and `9000` (if you enabled public database access).
+
+See [`docs/gcp-deployment.md`](./docs/gcp-deployment.md) for a complete GCP + Cloudflare walkthrough.
 
 ## 🧪 Running Tests
 

@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+# Ensure nginx has the self-signed certs it needs for the HTTPS listener.
+if [ ! -f "$(dirname "$0")/../certs/nginx.crt" ]; then
+  "$(dirname "$0")/generate-self-signed-cert.sh"
+fi
+
 docker run --rm \
   --network omnideck_backend \
   --env-file "$(pwd)/.env" \
