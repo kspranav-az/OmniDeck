@@ -12,7 +12,7 @@ import {
   getDeveloperServices,
   getDeveloperUsage,
   testService,
-  getUsageHistory,
+  getDeveloperUsageHistory,
   type ServiceDef,
   type Tenant,
   type Usage,
@@ -150,7 +150,7 @@ export default function DeveloperDashboard() {
     const loadHistory = async () => {
       setHistoryLoading(true)
       try {
-        const data = await getUsageHistory(tenant.name, historyService, 24)
+        const data = await getDeveloperUsageHistory(historyService, 24)
         setHistory(data)
       } catch (err) {
         toast.addToast(err instanceof Error ? err.message : 'Failed to load usage history', 'error')

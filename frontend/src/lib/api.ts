@@ -195,6 +195,18 @@ export async function getUsageHistory(
   )
 }
 
+export async function getDeveloperUsageHistory(
+  service?: string,
+  hours = 24,
+): Promise<UsageHistoryResponse> {
+  const params = new URLSearchParams()
+  if (service) params.append('service', service)
+  params.append('hours', String(hours))
+  return handleResponse<UsageHistoryResponse>(
+    await fetch(`${API_BASE}/developer/usage-history?${params.toString()}`),
+  )
+}
+
 export async function getVolumes(): Promise<{ volumes: Volume[] }> {
   const data = await handleResponse<{ volumes: string[] }>(await fetch(`${API_BASE}/admin/volumes`))
   return { volumes: data.volumes.map((name) => ({ name })) }

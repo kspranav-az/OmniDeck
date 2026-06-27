@@ -502,24 +502,14 @@ def api_admin_health_services(request: Request):
 
 
 # -----------------------------------------------------------------------------
-# Usage history (admin only)
+# Usage history helpers
 # -----------------------------------------------------------------------------
-@app.get("/api/admin/usage-history")
-def api_admin_usage_history(
-    request: Request,
-    tenant: str = Query(...),
-    service: str = Query(...),
-    hours: int = Query(24),
-    db: Session = Depends(get_db),
-):
-    require_admin(request)
-    valid_services = {"postgres", "mongo", "redis", "minio"}
-    if service not in valid_services:
-        raise HTTPException(status_code=400, detail="invalid service")
+_valid_usage_services = {"postgres", "mongo", "redis", "minio"}
 
-    tenant_obj = db.query(Tenant).filter(Tenant.name == tenant).first()
-    if not tenant_obj:
-        raise HTTPException(status_code=404, detail="tenant not found")
+
+def _usage_history(db: Session, tenant_obj: Tenant, service: str, hours: int) -> dict:
+    if service not in _valid_usage_services:
+        raise HTTPException(status_code=400, detail="invalid service")
 
     if service in ("postgres", "mongo"):
         value_col = getattr(UsageSnapshot, f"{service}_size_mb")
@@ -544,7 +534,33 @@ def api_admin_usage_history(
     )
 
     points = [{"hour": row.hour, "value": round(row.avg_value, 2) if row.avg_value is not None else 0} for row in rows]
-    return {"service": service, "tenant": tenant, "points": points}
+    return {"service": service, "tenant": tenant_obj.name, "points": points}
+
+
+@app.get("/api/admin/usage-history")
+def api_admin_usage_history(
+    request: Request,
+    tenant: str = Query(...),
+    service: str = Query(...),
+    hours: int = Query(24),
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    tenant_obj = db.query(Tenant).filter(Tenant.name == tenant).first()
+    if not tenant_obj:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    return _usage_history(db, tenant_obj, service, hours)
+
+
+@app.get("/api/developer/usage-history")
+def api_developer_usage_history(
+    request: Request,
+    service: str = Query(...),
+    hours: int = Query(24),
+    db: Session = Depends(get_db),
+):
+    tenant_obj = get_current_tenant(request, db)
+    return _usage_history(db, tenant_obj, service, hours)
 
 
 # -----------------------------------------------------------------------------
