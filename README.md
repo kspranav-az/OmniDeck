@@ -181,13 +181,31 @@ If you expose OmniDeck on a public domain:
 
 1. Point your domain's DNS A record to your server's public IP.
 2. Enable the Cloudflare proxy (orange cloud) for the record.
-3. In **SSL/TLS → Overview**, select **Full** mode. Do **not** use "Flexible" — it will cause redirect loops.
-4. Generate the origin certificate on the server:
-   ```bash
-   ./scripts/generate-self-signed-cert.sh your-domain.com
-   docker compose up -d --force-recreate nginx
-   ```
-5. Allow Cloudflare IP ranges in your server's firewall for ports `80`, `443`, `5432`, `27017`, `6379`, and `9000` (if you enabled public database access).
+3. Allow Cloudflare IP ranges in your server's firewall for ports `80`, `443`, `5432`, `27017`, `6379`, and `9000` (if you enabled public database access).
+4. Choose an origin certificate option:
+
+### Option A — Self-signed certificate (quickest)
+
+```bash
+./scripts/generate-self-signed-cert.sh your-domain.com
+docker compose up -d --force-recreate nginx
+```
+
+In Cloudflare, set **SSL/TLS → Overview** to **Full** (not "Full (Strict)").
+
+### Option B — Let's Encrypt (recommended)
+
+```bash
+./scripts/setup-letsencrypt.sh your-domain.com admin@example.com
+```
+
+This requests a free certificate from Let's Encrypt and configures nginx to use it. In Cloudflare, set **SSL/TLS → Overview** to **Full (Strict)**.
+
+Auto-renewal is handled by certbot. Add this cron job for seamless renewal:
+
+```cron
+0 3 * * * /usr/bin/certbot renew --quiet --pre-hook "cd /opt/OmniDeck && docker compose stop nginx" --post-hook "cd /opt/OmniDeck && ./scripts/deploy-letsencrypt.sh your-domain.com"
+```
 
 See [`docs/gcp-deployment.md`](./docs/gcp-deployment.md) for a complete GCP + Cloudflare walkthrough.
 
