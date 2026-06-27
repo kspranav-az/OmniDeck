@@ -110,6 +110,7 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-admin}
       OMNIDECK_BACKUP_ROOT: /backups
+      OMNIDECK_PUBLIC_HOST: ${OMNIDECK_PUBLIC_HOST:-}
     volumes:
       - frontend_db:/data
       - backups:/backups
@@ -141,10 +142,14 @@ services:
     container_name: omnideck-nginx
     restart: unless-stopped
     volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
       - "80:80"
       - "443:443"
+      - "5432:5432"
+      - "27017:27017"
+      - "6379:6379"
+      - "9000:9000"
     deploy:
       resources:
         limits:

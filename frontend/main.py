@@ -122,6 +122,25 @@ def run_deprovision(tenant_name: str):
 
 
 def tenant_to_dict(tenant: Tenant, include_login_password: bool = False) -> dict:
+    # When OMNIDECK_PUBLIC_HOST is set, connection strings point at the public
+    # endpoint (e.g. omnideck.hapkonic.com) so developers can reach services from
+    # outside the Docker network. Otherwise internal Docker hostnames are used.
+    public_host = os.environ.get("OMNIDECK_PUBLIC_HOST")
+    if public_host:
+        db_host = public_host
+        pg_port = 5432
+        mongo_port = 27017
+        redis_port = 6379
+        minio_port = 9000
+        minio_host = public_host
+    else:
+        db_host = "postgres"
+        pg_port = 5432
+        mongo_port = 27017
+        redis_port = 6379
+        minio_port = 9000
+        minio_host = "minio"
+
     data = {
         "id": tenant.id,
         "name": tenant.name,
@@ -132,28 +151,28 @@ def tenant_to_dict(tenant: Tenant, include_login_password: bool = False) -> dict
                 "user": tenant.postgres_user,
                 "password": tenant.postgres_password,
                 "database": f"game_{tenant.name}",
-                "host": "postgres",
-                "port": 5432,
+                "host": db_host,
+                "port": pg_port,
             },
             "mongo": {
                 "user": tenant.mongo_user,
                 "password": tenant.mongo_password,
                 "database": f"game_{tenant.name}",
-                "host": "mongo",
-                "port": 27017,
+                "host": db_host,
+                "port": mongo_port,
             },
             "redis": {
                 "user": tenant.redis_user,
                 "password": tenant.redis_password,
-                "host": "redis",
-                "port": 6379,
+                "host": db_host,
+                "port": redis_port,
             },
             "minio": {
                 "access_key": tenant.minio_access_key,
                 "secret_key": tenant.minio_secret_key,
                 "bucket": tenant.name,
-                "host": "minio",
-                "port": 9000,
+                "host": minio_host,
+                "port": minio_port,
             },
         },
     }
