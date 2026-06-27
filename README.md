@@ -170,6 +170,9 @@ All configuration is via environment variables in `.env`:
 | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | MinIO root credentials | — |
 | `OMNIDECK_BACKUP_ROOT` | Backup storage path | `/backups` |
 | `SECRET_KEY` | Session secret | `dev-secret-change-me` |
+| `OMNIDECK_PUBLIC_HOST` | Public web UI domain (can be Cloudflare-proxied) | — |
+| `OMNIDECK_PUBLIC_DB_HOST` | Public endpoint for Postgres/MongoDB/Redis (do **not** proxy) | — |
+| `OMNIDECK_PUBLIC_MINIO_HOST` | Public endpoint for MinIO S3 API (do **not** proxy) | — |
 
 See `.env.example` for the full list.
 
@@ -180,9 +183,32 @@ See `.env.example` for the full list.
 If you expose OmniDeck on a public domain:
 
 1. Point your domain's DNS A record to your server's public IP.
-2. Enable the Cloudflare proxy (orange cloud) for the record.
-3. Allow Cloudflare IP ranges in your server's firewall for ports `80`, `443`, `5432`, `27017`, `6379`, and `9000` (if you enabled public database access).
-4. Choose an origin certificate option:
+2. Enable the Cloudflare proxy (orange cloud) for the main dashboard record.
+3. Allow Cloudflare IP ranges in your server's firewall for ports `80` and `443`.
+4. For database and MinIO S3 access, Cloudflare **only proxies HTTP/HTTPS on ports 80/443**, not raw TCP ports. Create additional DNS records with the proxy **disabled** (grey cloud):
+
+   | Record | Type | Value | Proxy status | Purpose |
+   |--------|------|-------|--------------|---------|
+   | `omnideck.hapkonic.com` | A | your server IP | **Proxied** (orange) | Web UI + MinIO console |
+   | `db.omnideck.hapkonic.com` | A | your server IP | **DNS only** (grey) | Postgres, MongoDB, Redis |
+   | `s3.omnideck.hapkonic.com` | A | your server IP | **DNS only** (grey) | MinIO S3 API |
+
+5. Open the database ports (`5432`, `27017`, `6379`, `9000`) in your server's firewall **for your office/team IPs only** — do not expose them to the whole internet.
+6. Set the environment variables in `.env`:
+
+   ```env
+   OMNIDECK_PUBLIC_HOST=omnideck.hapkonic.com
+   OMNIDECK_PUBLIC_DB_HOST=db.omnideck.hapkonic.com
+   OMNIDECK_PUBLIC_MINIO_HOST=s3.omnideck.hapkonic.com
+   ```
+
+7. Recreate the frontend container to pick up the new env vars:
+
+   ```bash
+   docker compose up -d --force-recreate frontend
+   ```
+
+8. Choose an origin certificate option:
 
 ### Option A — Self-signed certificate (quickest)
 

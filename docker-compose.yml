@@ -111,6 +111,8 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-admin}
       OMNIDECK_BACKUP_ROOT: /backups
       OMNIDECK_PUBLIC_HOST: ${OMNIDECK_PUBLIC_HOST:-}
+      OMNIDECK_PUBLIC_DB_HOST: ${OMNIDECK_PUBLIC_DB_HOST:-}
+      OMNIDECK_PUBLIC_MINIO_HOST: ${OMNIDECK_PUBLIC_MINIO_HOST:-}
     volumes:
       - frontend_db:/data
       - backups:/backups
