@@ -98,12 +98,50 @@ def _finish_job(job_id: str, success: bool = True, error: Optional[str] = None):
 # -----------------------------------------------------------------------------
 # Startup
 # -----------------------------------------------------------------------------
+def _sync_redis_acl_users(db: Session):
+    """Ensure every enabled tenant has a working Redis ACL user.
+
+    Redis ACL users are persisted via AOF, but if Redis is restarted before AOF
+    fsyncs or if the volume is lost, users can disappear. This recreates them
+    from the database on frontend startup.
+    """
+    try:
+        r = redis.Redis(
+            host="redis",
+            port=6379,
+            password=os.environ.get("REDIS_PASSWORD", "redis"),
+            decode_responses=True,
+        )
+        r.ping()
+    except Exception as e:
+        print(f"[startup] cannot connect to redis, skipping ACL sync: {e}")
+        return
+
+    for tenant in db.query(Tenant).all():
+        if not tenant.is_service_enabled("redis"):
+            continue
+        prefix = f"{tenant.name}:"
+        try:
+            r.acl_setuser(
+                username=tenant.name,
+                enabled=True,
+                passwords=[f"+{tenant.redis_password}"],
+                commands=["+@all"],
+                keys=[f"{prefix}*"],
+            )
+            print(f"[startup] synced redis ACL user {tenant.name}")
+        except Exception as e:
+            print(f"[startup] failed to sync redis ACL user {tenant.name}: {e}")
+    r.close()
+
+
 @app.on_event("startup")
 def on_startup():
     init_db()
     db = next(get_db())
     seed_admin(db)
     seed_services(db)
+    _sync_redis_acl_users(db)
 
 
 # -----------------------------------------------------------------------------
