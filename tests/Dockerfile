@@ -18,7 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends postgresql-client-16 docker-ce-cli docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/* \
     && ARCH=$(uname -m) \
-    && if [ "$ARCH" = "aarch64" ]; then MINIO_ARCH="arm64"; else MINIO_ARCH="$ARCH"; fi \
+    && case "$ARCH" in \
+        x86_64) MINIO_ARCH="amd64" ;; \
+        aarch64|arm64) MINIO_ARCH="arm64" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac \
     && curl -fsSL -o /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-${MINIO_ARCH}/mc \
     && chmod +x /usr/local/bin/mc
 
