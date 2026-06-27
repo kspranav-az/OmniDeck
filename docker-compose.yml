@@ -78,6 +78,7 @@ services:
       MINIO_PROMETHEUS_AUTH_TYPE: public
     volumes:
       - miniodata:/data
+      - ./minio-certs:/root/.minio/certs:ro
     ports:
       - "127.0.0.1:19000:9000"
       - "127.0.0.1:19001:9001"
@@ -87,7 +88,8 @@ services:
         limits:
           memory: 512M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      # MinIO may run with or without TLS depending on whether ./minio-certs is populated.
+      test: ["CMD", "sh", "-c", "curl -fk https://localhost:9000/minio/health/live || curl -f http://localhost:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
       retries: 5

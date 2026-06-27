@@ -12,6 +12,7 @@ from minio import Minio
 
 from common import (
     get_env,
+    minio_internal_url,
     mongo_db_name,
     postgres_db_name,
     validate_tenant_name,
@@ -86,23 +87,23 @@ def deprovision_minio(tenant: str):
 
     # Use mc to remove bucket (with versions), user, and policy
     subprocess.run(
-        ["mc", "alias", "set", "local", "http://minio:9000", root_user, root_password],
+        ["mc", "--insecure", "alias", "set", "local", minio_internal_url(), root_user, root_password],
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["mc", "rb", "--force", "--versions", f"local/{tenant}"],
+        ["mc", "--insecure", "rb", "--force", "--versions", f"local/{tenant}"],
         check=False,
         capture_output=True,
     )
     subprocess.run(
-        ["mc", "admin", "user", "remove", "local", access_key],
+        ["mc", "--insecure", "admin", "user", "remove", "local", access_key],
         check=False,
         capture_output=True,
     )
     policy_name = f"policy-{tenant}"
     subprocess.run(
-        ["mc", "admin", "policy", "remove", "local", policy_name],
+        ["mc", "--insecure", "admin", "policy", "remove", "local", policy_name],
         check=False,
         capture_output=True,
     )

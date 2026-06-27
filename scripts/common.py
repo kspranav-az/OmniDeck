@@ -42,3 +42,13 @@ def get_env(key: str, default: str = "") -> str:
         print(f"ERROR: environment variable {key} is not set", file=sys.stderr)
         sys.exit(1)
     return value
+
+
+def minio_internal_url() -> str:
+    """Return the internal MinIO URL used by admin scripts.
+
+    MinIO always runs with TLS in OmniDeck (./minio-certs are mounted into the
+    container). Admin scripts skip certificate verification because the internal
+    Docker hostname "minio" does not match the certificate's SAN.
+    """
+    return "https://minio:9000"

@@ -6,6 +6,13 @@ if [ ! -f "$(dirname "$0")/../certs/nginx.crt" ]; then
   "$(dirname "$0")/generate-self-signed-cert.sh"
 fi
 
+# MinIO expects public.crt/private.key for its TLS listener.
+mkdir -p "$(dirname "$0")/../minio-certs"
+if [ ! -f "$(dirname "$0")/../minio-certs/public.crt" ]; then
+  cp "$(dirname "$0")/../certs/nginx.crt" "$(dirname "$0")/../minio-certs/public.crt"
+  cp "$(dirname "$0")/../certs/nginx.key" "$(dirname "$0")/../minio-certs/private.key"
+fi
+
 docker run --rm \
   --network omnideck_backend \
   --env-file "$(pwd)/.env" \

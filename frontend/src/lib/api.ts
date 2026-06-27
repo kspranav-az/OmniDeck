@@ -22,6 +22,7 @@ export interface Credentials {
   access_key?: string
   secret_key?: string
   bucket?: string
+  secure?: boolean
 }
 
 export interface Tenant {

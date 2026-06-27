@@ -11,6 +11,7 @@ set -e
 DOMAIN="${1:-}"
 EMAIL="${2:-}"
 CERT_DIR="$(dirname "$0")/../certs"
+MINIO_CERT_DIR="$(dirname "$0")/../minio-certs"
 
 if [ -z "$DOMAIN" ] || [ -z "$EMAIL" ]; then
     echo "Usage: $0 <domain> <email>"
@@ -47,9 +48,16 @@ sudo cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$CERT_DIR/nginx.key"
 sudo chmod 644 "$CERT_DIR/nginx.crt"
 sudo chmod 600 "$CERT_DIR/nginx.key"
 
-# Start nginx with the new certificate
-echo "Starting nginx with Let's Encrypt certificate..."
-docker compose up -d nginx
+# Copy certificate into the MinIO certs directory with the names MinIO expects
+mkdir -p "$MINIO_CERT_DIR"
+sudo cp "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$MINIO_CERT_DIR/public.crt"
+sudo cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$MINIO_CERT_DIR/private.key"
+sudo chmod 644 "$MINIO_CERT_DIR/public.crt"
+sudo chmod 600 "$MINIO_CERT_DIR/private.key"
+
+# Start services with the new certificates
+echo "Starting nginx and MinIO with Let's Encrypt certificates..."
+docker compose up -d nginx minio
 
 echo ""
 echo "Certificate installed for $DOMAIN."

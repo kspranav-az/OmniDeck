@@ -22,8 +22,10 @@ export function getConnectionString(service: string, creds: Credentials): string
       return `mongodb://${creds.user}:${creds.password}@${creds.host}:${creds.port}/${creds.database}?authSource=${creds.database}`
     case 'redis':
       return `redis://${creds.user}:${creds.password}@${creds.host}:${creds.port}/0`
-    case 'minio':
-      return `http://${creds.host}:${creds.port}`
+    case 'minio': {
+      const protocol = creds.secure ? 'https' : 'http'
+      return `${protocol}://${creds.host}:${creds.port}`
+    }
     default:
       return ''
   }
@@ -33,7 +35,7 @@ export function getSnippets(service: string, creds: Credentials) {
   const postgresConn = getConnectionString('postgres', creds)
   const mongoConn = getConnectionString('mongo', creds)
   const redisConn = getConnectionString('redis', creds)
-  const minioEndpoint = `http://${creds.host}:${creds.port}`
+  const minioEndpoint = `${creds.secure ? 'https' : 'http'}://${creds.host}:${creds.port}`
 
   switch (service) {
     case 'postgres':
@@ -129,21 +131,23 @@ func main() {
 }`,
         curl: `redis-cli -u ${redisConn} PING`,
       }
-    case 'minio':
+    case 'minio': {
+      const secureFlag = creds.secure ? 'True' : 'False'
+      const useSSLFlag = creds.secure ? 'true' : 'false'
       return {
         Python: `from minio import Minio
 
 client = Minio("${creds.host}:${creds.port}",
     access_key="${creds.access_key}",
     secret_key="${creds.secret_key}",
-    secure=False)
+    secure=${secureFlag})
 print(client.bucket_exists("${creds.bucket}"))`,
         'Node.js': `const { Client } = require('minio')
 
 const minioClient = new Client({
   endPoint: '${creds.host}',
   port: ${creds.port},
-  useSSL: false,
+  useSSL: ${useSSLFlag},
   accessKey: '${creds.access_key}',
   secretKey: '${creds.secret_key}'
 })
@@ -158,13 +162,14 @@ import (
 func main() {
   client, _ := minio.New("${creds.host}:${creds.port}", &minio.Options{
     Creds: credentials.NewStaticV4("${creds.access_key}", "${creds.secret_key}", ""),
-    Secure: false,
+    Secure: ${useSSLFlag},
   })
   client.BucketExists(ctx, "${creds.bucket}")
 }`,
         curl: `# List buckets with S3-style API
 curl ${minioEndpoint} -H "Authorization: Bearer ..."`,
       }
+    }
     default:
       return {}
   }

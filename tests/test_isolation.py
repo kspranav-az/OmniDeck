@@ -8,6 +8,7 @@ from io import BytesIO
 import psycopg
 import pymongo
 import redis
+import urllib3
 from minio import Minio
 from minio.error import S3Error
 
@@ -110,11 +111,14 @@ def test_tenant_isolation():
         r_alpha.close()
 
         # 4. MinIO: alpha can access alpha bucket but not beta bucket
+        # MinIO runs with TLS internally; the hostname mismatch requires skipping verification.
+        http_client = urllib3.PoolManager(cert_reqs="CERT_NONE", assert_hostname=False)
         alpha_minio = Minio(
             "minio:9000",
             access_key=alpha["minio"]["access_key"],
             secret_key=alpha["minio"]["secret_key"],
-            secure=False,
+            secure=True,
+            http_client=http_client,
         )
         alpha_minio.put_object(alpha["minio"]["bucket"], "hello.txt", BytesIO(b"hello"), length=5)
         assert alpha_minio.bucket_exists(alpha["minio"]["bucket"])

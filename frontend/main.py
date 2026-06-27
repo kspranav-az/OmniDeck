@@ -15,6 +15,7 @@ import httpx
 import psycopg
 import pymongo
 import redis
+import urllib3
 from fastapi import FastAPI, Request, Form, Depends, HTTPException, status, Query
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -35,6 +36,25 @@ from auth import (
     seed_admin,
 )
 from models import Tenant, Service, UsageSnapshot, SessionLocal, get_db, init_db, seed_services
+
+
+def _minio_client(access_key: str, secret_key: str):
+    """Return a MinIO client for the internal TLS-enabled service.
+
+    Certificate verification is disabled because the internal Docker hostname
+    does not match the certificate's SAN.
+    """
+    from minio import Minio
+
+    http_client = urllib3.PoolManager(cert_reqs="CERT_NONE", assert_hostname=False)
+    return Minio(
+        "minio:9000",
+        access_key=access_key,
+        secret_key=secret_key,
+        secure=True,
+        http_client=http_client,
+    )
+
 
 app = FastAPI(title="OmniDeck")
 app.add_middleware(
@@ -147,12 +167,17 @@ def tenant_to_dict(tenant: Tenant, include_login_password: bool = False) -> dict
         mongo_port = 27017
         redis_port = 6379
 
+    # MinIO always runs with TLS (./minio-certs mounted at /root/.minio/certs).
     if minio_host:
         minio_api_host = minio_host
         minio_port = 9000
+        minio_secure = True
     else:
+        # Local development fallback; the internal Docker hostname won't match the
+        # certificate, so SDKs will need to skip verification.
         minio_api_host = "minio"
         minio_port = 9000
+        minio_secure = True
 
     data = {
         "id": tenant.id,
@@ -186,6 +211,7 @@ def tenant_to_dict(tenant: Tenant, include_login_password: bool = False) -> dict
                 "bucket": tenant.name,
                 "host": minio_api_host,
                 "port": minio_port,
+                "secure": minio_secure,
             },
         },
     }
@@ -518,10 +544,9 @@ def api_admin_health_services(request: Request):
         r.close()
 
     def _check_minio():
-        from minio import Minio
         access_key = os.environ.get("MINIO_ROOT_USER", "")
         secret_key = os.environ.get("MINIO_ROOT_PASSWORD", "")
-        mc = Minio("minio:9000", access_key=access_key, secret_key=secret_key, secure=False)
+        mc = _minio_client(access_key, secret_key)
         mc.list_buckets()
 
     services = [
@@ -856,8 +881,7 @@ def api_developer_test_service(request: Request, service_key: str, db: Session =
             r.ping()
             r.close()
         elif service_key == "minio":
-            from minio import Minio
-            mc = Minio("minio:9000", access_key=tenant.minio_access_key, secret_key=tenant.minio_secret_key, secure=False)
+            mc = _minio_client(tenant.minio_access_key, tenant.minio_secret_key)
             mc.bucket_exists(tenant.name)
         else:
             raise HTTPException(status_code=400, detail="unknown service")
@@ -926,13 +950,7 @@ def get_tenant_usage(tenant: Tenant) -> dict:
 
     if tenant.is_service_enabled("minio"):
         try:
-            from minio import Minio
-            client = Minio(
-                "minio:9000",
-                access_key=tenant.minio_access_key,
-                secret_key=tenant.minio_secret_key,
-                secure=False,
-            )
+            client = _minio_client(tenant.minio_access_key, tenant.minio_secret_key)
             objects = client.list_objects(tenant.name, recursive=True)
             obj_list = list(objects)
             usage["minio_object_count"] = len(obj_list)

@@ -225,7 +225,9 @@ In Cloudflare, set **SSL/TLS → Overview** to **Full** (not "Full (Strict)").
 ./scripts/setup-letsencrypt.sh your-domain.com admin@example.com
 ```
 
-This requests a free certificate from Let's Encrypt and configures nginx to use it. In Cloudflare, set **SSL/TLS → Overview** to **Full (Strict)**.
+This requests a free certificate from Let's Encrypt and configures both **nginx** and **MinIO** to use it. The MinIO S3 API then serves HTTPS on port 9000, and the dashboard connection strings will show `https://`.
+
+In Cloudflare, set **SSL/TLS → Overview** to **Full (Strict)**.
 
 Auto-renewal is handled by certbot. Add this cron job for seamless renewal:
 
@@ -234,6 +236,10 @@ Auto-renewal is handled by certbot. Add this cron job for seamless renewal:
 ```
 
 See [`docs/gcp-deployment.md`](./docs/gcp-deployment.md) for a complete GCP + Cloudflare walkthrough.
+
+### MinIO HTTPS
+
+MinIO is configured to use the same TLS certificate as nginx. The certificate is mounted from `./minio-certs/public.crt` and `./minio-certs/private.key`. The setup and renewal scripts populate these files automatically.
 
 ## 🧪 Running Tests
 

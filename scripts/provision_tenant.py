@@ -8,12 +8,14 @@ import psycopg
 from psycopg import sql
 import pymongo
 import redis
+import urllib3
 from minio import Minio
 from minio.versioningconfig import VersioningConfig
 
 from common import (
     generate_password,
     get_env,
+    minio_internal_url,
     mongo_db_name,
     postgres_db_name,
     redis_key_prefix,
@@ -132,7 +134,16 @@ def provision_minio(tenant: str, secret_key: str):
     access_key = tenant
     root_user = get_env("MINIO_ROOT_USER")
     root_password = get_env("MINIO_ROOT_PASSWORD")
-    client = Minio("minio:9000", access_key=root_user, secret_key=root_password, secure=False)
+    # Internal MinIO uses TLS with a certificate that does not match the Docker
+    # hostname, so we disable certificate verification for admin operations.
+    http_client = urllib3.PoolManager(cert_reqs="CERT_NONE", assert_hostname=False)
+    client = Minio(
+        "minio:9000",
+        access_key=root_user,
+        secret_key=root_password,
+        secure=True,
+        http_client=http_client,
+    )
 
     # Create bucket if not exists
     if not client.bucket_exists(tenant):
@@ -144,7 +155,7 @@ def provision_minio(tenant: str, secret_key: str):
     # Best-effort removal first makes this idempotent for re-enabled services.
     import subprocess
     subprocess.run(
-        ["mc", "alias", "set", "local", "http://minio:9000", root_user, root_password],
+        ["mc", "alias", "set", "local", minio_internal_url(), root_user, root_password, "--insecure"],
         check=True,
         capture_output=True,
     )
@@ -164,32 +175,32 @@ def provision_minio(tenant: str, secret_key: str):
         f.write(policy_doc)
         policy_path = f.name
     subprocess.run(
-        ["mc", "admin", "policy", "detach", "local", policy_name, "--user", access_key],
+        ["mc", "--insecure", "admin", "policy", "detach", "local", policy_name, "--user", access_key],
         check=False,
         capture_output=True,
     )
     subprocess.run(
-        ["mc", "admin", "user", "remove", "local", access_key],
+        ["mc", "--insecure", "admin", "user", "remove", "local", access_key],
         check=False,
         capture_output=True,
     )
     subprocess.run(
-        ["mc", "admin", "policy", "remove", "local", policy_name],
+        ["mc", "--insecure", "admin", "policy", "remove", "local", policy_name],
         check=False,
         capture_output=True,
     )
     subprocess.run(
-        ["mc", "admin", "policy", "create", "local", policy_name, policy_path],
+        ["mc", "--insecure", "admin", "policy", "create", "local", policy_name, policy_path],
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["mc", "admin", "user", "add", "local", access_key, secret_key],
+        ["mc", "--insecure", "admin", "user", "add", "local", access_key, secret_key],
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["mc", "admin", "policy", "attach", "local", policy_name, "--user", access_key],
+        ["mc", "--insecure", "admin", "policy", "attach", "local", policy_name, "--user", access_key],
         check=True,
         capture_output=True,
     )
